@@ -1,0 +1,236 @@
+---
+title: "logistic_regression"
+author: "Benjamin Khothsombath"
+date: "8/27/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Logistic Regression
+
+Logistic regression differs from linear regression in that linear regression requires all of the variables to be numeric in order to predict a numeric outcome, whereas logistic regression is used to classify an object into a certain group. For this example, we will be looking at data from the Wisconsin Breast Cancer Database in order to determine whether a cancer is malignant or benign.
+
+### Data Processing
+
+First, we load the data in from the `mlbench` package.
+
+```{r}
+library(mlbench)
+data(BreastCancer)
+head(BreastCancer, n = 25)
+```
+
+Now note that in the `Bare.nuclei` column of the data, we have many missing values, so the question now becomes of what to do with these values. I've decided to fill in these values with 1 after looking at the data through a histogram, as it is almost 4 times more common than the second most common entry, which is a 10.
+
+```{r}
+hist(as.numeric(BreastCancer$Bare.nuclei))
+```
+
+We also have a few more problems that we need to resolve in the following lines of code:
+
+1. The ID number will not affect the class of the tumor, so we can remove it.
+2. The columns are stored as factors, so we want to convert them into numeric entries.
+3. We want to add a column of one's to the front of the data.
+4. We want to shuffle the data, then split it into a training set and test set.
+5. The class of the tumor needs to be separated from the rest of the data.
+6. In `y` and `test_outputs`, convert `"benign"` to `0` and `"malignant"` to `1`.
+
+```{r}
+# Remove ID column
+BreastCancer <- BreastCancer[, -1]
+
+# Keep classes
+classes <- BreastCancer$Class
+
+# Convert factors to numeric
+BreastCancer <- apply(BreastCancer[, -ncol(BreastCancer)], 2, function(f) {
+  as.numeric(as.character(f))
+})
+
+# Convert NA values to 1
+BreastCancer[is.na(BreastCancer)] <- 1
+
+# Add column of 1's
+BreastCancer <- cbind(rep(1, nrow(BreastCancer)), BreastCancer)
+
+# Shuffle data
+set.seed(1312)
+shuffle <- sample(nrow(BreastCancer))
+BreastCancer <- BreastCancer[shuffle, ]
+classes <- classes[shuffle]
+X <- BreastCancer[seq_len(floor(nrow(BreastCancer) * 0.8)), ]
+test_set <- BreastCancer[seq(ceiling(nrow(BreastCancer) * 0.8), nrow(BreastCancer)), ]
+y <- classes[seq_len(floor(length(classes) * 0.8))]
+test_outputs <- classes[seq(ceiling(length(classes) * 0.8), length(classes))]
+nrow(X)
+nrow(test_set)
+
+# Convert factors to numeric data
+y <- as.numeric(y == "malignant")
+test_outputs <- as.numeric(test_outputs == "malignant")
+```
+
+### Creating Functions
+
+The goal of logistic regression is to try to predict a binary output. For this example, we want to use the given data to classify whether a tumor is benign or malignant. The way we will approach this is that our model will give us a probability (between 0 and 1) that a tumor is malignant. If that value is closer to 0, we will classify it as benign, and if it is greater than or equal to 0.5, we will classify it as malignant. That being said, we need to define a function where the domain is all real numbers, but the range is only values between 0 and 1 (exclusive). One such function with these features is the sigmoid function, which is defined by $$g(z) = \frac{1}{1+e^{-z}}$$ For our model, we will use input paramaters $\theta_0, \theta_1, \dots, \theta_n$ where $n$ is the number of features and our model will be of the form $$h_{\theta}(x) = g(\theta_0x_0 + \theta_1x_1 + \theta_2x_2 + \dots + \theta_nx_n)$$ where $x_0$ = 1.
+
+```{r}
+g <- function(z) {
+  1 / (1 + exp(-z))
+}
+
+h <- function(X, theta) {
+  # X is a data frame/matrix with m rows and n + 1 columns
+  # theta is a vector of length n + 1
+  if (!is.null(dim(X))) {
+    g(apply(X, 1, function(row) {
+      sum(row * theta)
+    }))
+  } else {
+    # or, if X is a vector of length n + 1
+    g(sum(X * theta))
+  }
+}
+```
+
+Now we need to make a cost function for logistic regression. We want a cost function that has the following behavior:
+
+* If y = 1 and $h_{\theta}(x) = 1$, then the model did a good job, so the cost should be 0, but as $h_{\theta}(x) \rightarrow 0, J(\theta) \rightarrow \infty$
+* If y = 0 and $h_{\theta}(x) = 0$, then the model did a good job, so the cost should be 0, but as $h_{\theta}(x) \rightarrow 1, J(\theta) \rightarrow \infty$
+
+So, we will choose the following as our cost function: $$Cost(h_{\theta}(x), y) = -y\log(h_{\theta}(x)) - (1-y)\log(1-h_{\theta}(x))$$ where the $\log$ is the natural logarithm. The following function works because y is either 0 or 1, so one of the terms will cancel out. If $y = 0$, we are left with $Cost = \log(1-h_{\theta}(x))$, which gives us the following:
+
+```{r}
+plot(seq(0, 0.9, by = 0.05), -log(1-(seq(0, 0.9, by = 0.05))), type = "l",
+     xlab = "h(x)", ylab = "Cost", main = expression(log(1-h(x))))
+```
+
+And if $y = 1$, we are left with $J(\theta) = -\log(h_{\theta}(x))$, which looks like this:
+
+```{r}
+plot(seq(0.1, 1, by = 0.05,), -log(seq(0.1, 1, by = 0.05)), type = "l",
+     xlab = "h(x)", ylab = "Cost", main = expression(-log(h(x))))
+```
+
+So, the cost function (for a single observation), can be implemented below
+
+```{r}
+cost <- function(x, y, theta) {
+  h <- h(x, theta)
+  # h is a real number
+  # x is a vector of length n + 1
+  # theta is a vector of length n + 1
+  # y is a real number
+  (-y * log(h)) - ((1 - y) * log(1 - h))
+}
+```
+
+And the overall cost function is $$J(\theta) = \frac{1}{m} \sum_{i = 1}^{m}Cost(h_{\theta}(x^{(i)}), y^{(i)})$$ where $m$ is the number of training examples, $x^{(i)}$ are the characteristics of the $i$th training example, and $y^{(i)}$ is the ith output.
+
+```{r}
+costFunction <- function(X, y, theta) {
+  m <- length(y)
+  n <- ncol(X)
+  sum(vapply(seq(m), function(i) {
+    cost(X[i, ], y[i], theta)
+  }, numeric(1))) / m
+}
+```
+
+We can now implement gradient descent. Note that there are methods other than gradient descent that are much faster to use, but they are more complicated, and are implemented in other packages. However, this dataset is rather small, so gradient descent should suffice. We want to minimize $J(\theta)$, so we can update the $\theta$'s by repeating the following update: $$\theta_j = \theta_j - \alpha \frac{\partial}{\partial\theta_j}J(\theta)$$ where $\alpha$ is our learning rate and $$\frac{\partial}{\partial\theta_j}J(\theta) = \frac{1}{m}\sum_{i=1}^{m}(h_{\theta}(x^{(i)})-y^{(i)})x_j^{(i)}$$ The function is the exact same as it was in linear regression, just with a different function for $h_{\theta}(x)$.
+
+```{r}
+gradientDescent <- function(X, y, theta, alpha, max_iter) {
+  m <- nrow(X)
+  j_history <- numeric(0)
+  for (i in seq(max_iter)) {
+    h <- h(X, theta)
+    diff <- h - y
+    deriv <- apply(X, 2, function(col) {
+      sum(diff * col)
+    })
+    theta <- theta - (deriv * (alpha / m))
+    j_history[i] <- costFunction(X, y, theta)
+  }
+  list("j_history" = j_history, "theta" = theta)
+}
+```
+
+Almost done, we need to include our mean normalization function from last time to scale all of our data.
+
+```{r}
+meanNormalize <- function(X) {
+  # X is a data frame with m rows and n + 1 columns
+  # returns a list where new_X is the normalized data set
+  # mu is the means of each column
+  # sigma is the sds of each colun
+  new_X <- apply(X[, 2:ncol(X)], 2, function(col) {
+    mean <- mean(col)
+    sd <- sd(col)
+    (col - mean) / sd
+  })
+  new_X <- cbind(X[, 1], new_X)
+  mu <- apply(X, 2, mean)
+  sigma <- apply(X, 2, sd)
+  l <- list(new_X, mu, sigma)
+  names(l) <- c("X_norm", "mu", "sigma")
+  l
+}
+```
+
+And we'll build a function that can convert probabilities into 0's and 1's to classify tumors.
+
+```{r}
+predictClass <- function(h, thresh) {
+  ifelse(h > thresh, 1, 0)
+}
+```
+
+
+### Building our model
+
+Let's initialize some $\theta$'s, normalize $X$, and begin gradient descent.
+
+```{r, cache=TRUE}
+m <- nrow(X)
+n <- ncol(X)
+theta <- rep(0, n)
+X_norm <- meanNormalize(X)$X_norm
+test_norm <- meanNormalize(test_set)$X_norm
+model <- gradientDescent(X_norm, y, theta, 0.1, 1000)
+```
+
+First, we'll plot $J(\theta)$ against each iteration to ensure that the cost is decreasing with each iteration. It can be proven mathematically that every iteration should bring the cost down, as the function $J(\theta)$ is convex.
+
+```{r}
+plot(x = 1:100, y = model$j_history[1:100], pch = 4, col = "blue", type = "l",
+     main = "J vs. Iteration", xlab = "Iteration", ylab = expression(J(theta)))
+```
+
+Now, we will save our final $\theta$ parameters as `theta` and see how the model did. Below are the first few values of h.
+
+```{r}
+theta <- model$theta
+test_h <- h(test_norm, theta)
+head(test_h, n = 30)
+```
+
+Now, we'll convert these probabilities into predictions. If the probability is above 0.5, we will classify the tumor as malignant, Otherwise, it is benign.
+
+```{r}
+predictions <- predictClass(test_h, thresh = 0.5)
+results <- cbind(predictions, test_outputs)
+colnames(results) <- c("Predicted Output", "Actual Output")
+head(results, n = 30)
+```
+
+As you can see, the model did a fairly good job of predicting the class of the tumor. To see how well it did on the entire test set, we can just run the following command:
+
+```{r}
+mean(predictions == test_outputs)
+```
+
+Which means that our model has a `r mean(predictions == test_outputs) * 100`% accuracy.
